@@ -48,6 +48,7 @@ public class SimpleDynamoProvider extends ContentProvider {
     String myHash=null;
     String myReplicaOne=null;
     String myReplicaTwo=null;
+    Boolean sleep = true;
 
     HashMap<String,String> idToHash;
     HashMap<String, String> hashToID; // We may not need this ever..
@@ -428,7 +429,16 @@ public class SimpleDynamoProvider extends ContentProvider {
 
 	@Override
 	public Uri insert(Uri uri, ContentValues values) {
-		String key = values.getAsString("key");
+        if(sleep && myPort.equals("11108")){
+            try {
+                Thread.sleep(4000);
+                sleep=false;
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        }
+
+        String key = values.getAsString("key");
         String value = values.getAsString("value");
         String coordinator = getCoordinatorPort(key);
         Long rowID;
