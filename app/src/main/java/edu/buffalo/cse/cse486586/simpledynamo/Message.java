@@ -10,7 +10,7 @@ import java.util.HashMap;
 
 public class Message implements Serializable{
     enum TYPE{
-        READ_ONE, WRITE_OWN, WRITE_REPLICA, WRITE, DUMMY, READ_ALL, REPLY_ALL, REPLY_ONE;
+        READ_ONE, WRITE_OWN, WRITE_REPLICA, WRITE, DUMMY, READ_ALL, REPLY_ALL, REPLY_ONE, DELETE_ONE, DELETE_ALL,DELETE_CORD;
     }
     private TYPE type;
     private String key, value, keyHash;

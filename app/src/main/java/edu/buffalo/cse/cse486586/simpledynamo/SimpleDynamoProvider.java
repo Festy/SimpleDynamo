@@ -338,6 +338,17 @@ public class SimpleDynamoProvider extends ContentProvider {
 
                 }
             }
+            else if (type.equals(Message.TYPE.DELETE_ONE)){
+                String key = m.getKey();
+                db.delete(TABLE_NAME,"key=?",new String[]{key});
+            }
+            else if(type.equals(Message.TYPE.DELETE_ALL)){
+                String key = m.getKey();
+                db.delete(TABLE_NAME, null, null);
+            }
+            else if(type.equals(Message.TYPE.DELETE_CORD)){
+                delete(null, m.getKey(), null);
+            }
 
 
         }
@@ -412,10 +423,52 @@ public class SimpleDynamoProvider extends ContentProvider {
 
         switch (key){
             case "\"@\"":
+                db.delete(TABLE_NAME,null,null);
                 break;
             case "\"*\"":
+                db.delete(TABLE_NAME,null,null);
+
+                for(String remotePort:idList){
+                    if(!remotePort.equals(myPort)){
+                        Message message = new Message();
+                        message.setType(Message.TYPE.DELETE_ALL);
+                        message.setSenderPort(myPort);
+                        message.setRemortPort(myReplicaOne);
+                        new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,message);
+                    }
+                }
                 break;
             default:
+                String coordinator = getCoordinatorPort(key);
+                if(myPort.equals(coordinator)){
+
+                    db.delete(TABLE_NAME,"key=?",new String[]{key});
+
+                    Message message = new Message();
+                    message.setType(Message.TYPE.DELETE_ONE);
+                    message.setSenderPort(myPort);
+                    message.setRemortPort(myReplicaOne);
+                    message.setKey(key);
+
+                    Message message1 = new Message();
+                    message1.setType(Message.TYPE.DELETE_ONE);
+                    message1.setSenderPort(myPort);
+                    message1.setRemortPort(myReplicaTwo);
+                    message1.setKey(key);
+
+                    new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,message);
+                    new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,message1);
+
+                }
+                else{
+                    Message message1 = new Message();
+                    message1.setType(Message.TYPE.DELETE_CORD);
+                    message1.setSenderPort(myPort);
+                    message1.setRemortPort(myReplicaTwo);
+                    message1.setKey(key);
+
+                    new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,message1);
+                }
                 break;
         }
 		return 0;
