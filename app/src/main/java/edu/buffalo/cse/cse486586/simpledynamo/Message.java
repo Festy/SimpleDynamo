@@ -10,7 +10,7 @@ import java.util.HashMap;
 
 public class Message implements Serializable{
     enum TYPE{
-        READ_ONE, WRITE_OWN, WRITE_REPLICA, WRITE, DUMMY, READ_ALL, REPLY_ALL, REPLY_ONE, DELETE_ONE, DELETE_ALL,DELETE_CORD;
+        READ_ONE, WRITE_OWN, WRITE_REPLICA, WRITE, ACK, READ_ALL, REPLY_ALL, REPLY_ONE, DELETE_ONE, DELETE_ALL,DELETE_CORD, GET_ME_ALL, RECEIVE_YOU_ALL;
     }
     private TYPE type;
     private String key, value, keyHash;
@@ -18,9 +18,27 @@ public class Message implements Serializable{
     private String remortPort;
     private boolean hasCoordinatorFailed = false;
     private HashMap<String, String> result;
+    private int messagID;
+    private String coordinator;
 
     public void setValue(String value) {
         this.value = value;
+    }
+
+    public void setMessagID(int messagID) {
+        this.messagID = messagID;
+    }
+
+    public String getCoordinator() {
+        return coordinator;
+    }
+
+    public void setCoordinator(String coordinator) {
+        this.coordinator = coordinator;
+    }
+
+    public int getMessagID() {
+        return messagID;
     }
 
     public void setKey(String key) {

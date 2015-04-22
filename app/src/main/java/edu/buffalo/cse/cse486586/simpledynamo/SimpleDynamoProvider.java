@@ -32,9 +32,19 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public class SimpleDynamoProvider extends ContentProvider {
 
+/*
+5562:177ccecaec32c54b82d5aaafc18a2dadb753e3b1
+5556:208f7f72b198dadd244e61801abe1ec3a4857bc9
+5554:33d6357cfaaf0f72991b0ecd8c56da066613c089
+5558:abf0fd8db03e5ecb199a9b82929e9db79b909643
+5560:c25ddd596aa7c81fa12378fa725f706d54325d12 */
 
     public Uri mUri;
     private static int SERVER_PORT = 10000;
+    private static int INSERT_LOCK_TIMEOUT = 1000;
+    private static int QUERY_ONE_TIMEOUT = 2000;
+    private static int QUERY_ALL_TIMEOUT = 2000;
+    private static int DELETE_ONE = 1000;
 
 //    String predecessor=null;
 //    String successor=null;
@@ -55,10 +65,13 @@ public class SimpleDynamoProvider extends ContentProvider {
     ArrayList<String> sortedHashList;
     ArrayList<String> idList;
     ConcurrentHashMap<String, String> result;
-
+    long ts;
     int resultCount = 0;
-
+    HashMap<Integer, Object> ackLockMap;
+    HashMap<Integer, Boolean> ackBooleanMap;
+    int messageID = 0;
     Object resultLock;
+
 
     /** Stage One:
      * Storing <k,v> in three nodes. (Failure is taken into account).
@@ -77,14 +90,15 @@ public class SimpleDynamoProvider extends ContentProvider {
 
     @Override
     public boolean onCreate() {
-        Log.e(TAG_LOG, "***************************");
-        Log.e(TAG_LOG, "**** OnCreate started *****");
-        Log.e(TAG_LOG, "***************************");
+
 
         /***************** Telephony *****************/
         TelephonyManager tel = (TelephonyManager) getContext().getSystemService(Context.TELEPHONY_SERVICE);
         String portStr = tel.getLine1Number().substring(tel.getLine1Number().length() - 4);
         myPort = String.valueOf((Integer.parseInt(portStr)*2));
+        Log.e(TAG_LOG, "***************************");
+        Log.e(TAG_LOG, "**** OnCreate started "+myPort+" ****");
+        Log.e(TAG_LOG, "***************************");
         myID = portStr;
         try {
             myHash = genHash(myID);
@@ -95,6 +109,8 @@ public class SimpleDynamoProvider extends ContentProvider {
 
         resultLock = new Object();
         result = new ConcurrentHashMap<String, String>();
+        ackLockMap = new HashMap<Integer, Object>();
+        ackBooleanMap = new HashMap<Integer, Boolean>();
 
         /***************** Database *****************/
         db = new DBHelper(getContext()).getWritableDatabase();
@@ -184,7 +200,7 @@ public class SimpleDynamoProvider extends ContentProvider {
 
         }
 
-        Log.i(TAG_LOG,"Replica ports are set");
+        Log.i(TAG_LOG,"Replica ports are set"+myPort+" "+myReplicaOne+" "+myReplicaTwo);
 
 
         /***************** Server *****************/
@@ -197,6 +213,28 @@ public class SimpleDynamoProvider extends ContentProvider {
             e.printStackTrace();
             Log.e(TAG_ERROR,"Server IO Exception");
         }
+//        String[] remotePorts = getNeighbours(myPort);
+//        Message m = new Message();
+//        m.setCoordinator(myPort);
+//        m.setSenderPort(myPort);
+//        m.setRemortPort(remotePorts[0]);
+//        m.setType(Message.TYPE.GET_ME_ALL);
+//
+//        Message m2 = new Message();
+//        m2.setSenderPort(myPort);
+//        m2.setRemortPort(remotePorts[1]);
+//        m2.setCoordinator(remotePorts[1]);
+//        m2.setType(Message.TYPE.GET_ME_ALL);
+//
+//        Message m3 = new Message();
+//        m3.setSenderPort(myPort);
+//        m3.setRemortPort(remotePorts[2]);
+//        m3.setCoordinator(remotePorts[2]);
+//        m3.setType(Message.TYPE.GET_ME_ALL);
+//
+//        new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, m);
+//        new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, m2);
+//        new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, m3);
         return false;
     }
     private class ServerTask extends AsyncTask<ServerSocket, Message,  Void> {
@@ -237,11 +275,57 @@ public class SimpleDynamoProvider extends ContentProvider {
 
             if(type.equals(Message.TYPE.WRITE_OWN) && failure.equals(false)){
 
-                // 1. Store it in your own
+                // 1. Send ACK first and then store it in your own
+//                Thread thread = new Thread(new ACKRunnable(m.getMessagID(),m.getSenderPort()));
+//                thread.setPriority(Thread.MAX_PRIORITY);
+//                thread.run();
+                Message ackMessage = new Message();
+                ackMessage.setType(Message.TYPE.ACK);
+                ackMessage.setMessagID(m.getMessagID());
+                ackMessage.setRemortPort(m.getSenderPort());
+
                 Log.i(TAG_LOG,"I am coordinator.. Storing in my db "+m.getKey()+" "+m.getValue());
                 ContentValues cv = new ContentValues();
                 cv.put("key",m.getKey());
                 cv.put("value",m.getValue());
+                cv.put("owner",m.getCoordinator());
+
+                Long rowID = db.insertWithOnConflict(TABLE_NAME, null,cv,SQLiteDatabase.CONFLICT_REPLACE);
+                if(rowID==-1){
+                    Log.e(TAG_ERROR,"Error in db inserting @onProgressUpdate @coordinator");
+                }
+
+                Message replica1 = new Message();
+                replica1.setCoordinatorFailure(false);
+                replica1.setType(Message.TYPE.WRITE_REPLICA);
+                replica1.setRemortPort(myReplicaOne);
+                replica1.setKey(m.getKey());
+                replica1.setValue(m.getValue());
+                replica1.setCoordinator(myPort);
+
+                Message replica2 = new Message();
+                replica2.setCoordinatorFailure(false);
+                replica2.setType(Message.TYPE.WRITE_REPLICA);
+                replica2.setRemortPort(myReplicaTwo);
+                replica2.setKey(m.getKey());
+                replica2.setValue(m.getValue());
+                replica2.setCoordinator(myPort);
+
+                Log.i(TAG_LOG,myPort);
+                new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, ackMessage);
+                Log.i(TAG_LOG, "Sending to replica "+myReplicaOne+" "+m.getKey()+" "+m.getValue());
+                new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, replica1);
+                Log.i(TAG_LOG, "Sending to replica "+myReplicaTwo+" "+m.getKey()+" "+m.getValue());
+                new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, replica2);
+
+            }
+            else if(type.equals(Message.TYPE.WRITE_OWN) && failure.equals(true)){
+                Log.i(TAG_LOG,"Replica 1: Failure at coordinator, storing in mine"+m.getKey()+" "+m.getValue());
+                ContentValues cv = new ContentValues();
+                cv.put("key",m.getKey());
+                cv.put("value",m.getValue());
+                cv.put("owner",m.getCoordinator());
+
                 Long rowID = db.insertWithOnConflict(TABLE_NAME, null,cv,SQLiteDatabase.CONFLICT_REPLACE);
                 if(rowID==-1){
                     Log.e(TAG_ERROR,"Error in db inserting @onProgressUpdate @coordinator");
@@ -254,17 +338,8 @@ public class SimpleDynamoProvider extends ContentProvider {
                 replica1.setKey(m.getKey());
                 replica1.setValue(m.getValue());
 
-                Message replica2 = new Message();
-                replica2.setCoordinatorFailure(false);
-                replica2.setType(Message.TYPE.WRITE_REPLICA);
-                replica2.setRemortPort(myReplicaTwo);
-                replica2.setKey(m.getKey());
-                replica2.setValue(m.getValue());
-
-                Log.i(TAG_LOG, "Sending to replica "+replica1.getRemortPort()+" "+m.getKey()+" "+m.getValue());
+                Log.i(TAG_LOG, "Sending to replica 2"+replica1.getRemortPort()+" "+m.getKey()+" "+m.getValue());
                 new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, replica1);
-                Log.i(TAG_LOG, "Sending to replica "+replica2.getRemortPort()+" "+m.getKey()+" "+m.getValue());
-                new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, replica2);
 
             }
 
@@ -273,8 +348,10 @@ public class SimpleDynamoProvider extends ContentProvider {
                 Log.i(TAG_LOG,"Storing key values as replication "+m.getKey()+" "+m.getValue());
                 ContentValues cv = new ContentValues();
                 cv.put("key",m.getKey());
-                cv.put("value",m.getValue());
-                Long rowID = db.insertWithOnConflict(TABLE_NAME, null,cv,SQLiteDatabase.CONFLICT_REPLACE);
+                cv.put("value", m.getValue());
+                cv.put("owner",m.getCoordinator());
+
+                Long rowID = db.insertWithOnConflict(TABLE_NAME, null, cv, SQLiteDatabase.CONFLICT_REPLACE);
                 if(rowID==-1){
                     Log.e(TAG_ERROR,"Error in db inserting @onProgressUpdate @replicator");
                 }
@@ -284,7 +361,7 @@ public class SimpleDynamoProvider extends ContentProvider {
                 HashMap<String, String>  result= new HashMap<String, String>();
                 Log.i(TAG_LOG,"Received request for * from "+m.getSenderPort());
 
-                Cursor cursor = db.rawQuery("select * from mytable",null);
+                Cursor cursor = db.rawQuery("select key,value from mytable",null);
                 cursor.moveToFirst();
                 if(cursor!=null && cursor.getCount()>0){
                     for(int i=0;i<cursor.getCount();i++){
@@ -298,18 +375,20 @@ public class SimpleDynamoProvider extends ContentProvider {
                 message.setType(Message.TYPE.REPLY_ALL);
                 message.setResult(result);
                 message.setRemortPort(m.getSenderPort());
+                message.setMessagID(m.getMessagID());
                 new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, message);
 
             }
             else if(type.equals(Message.TYPE.READ_ONE)){
-                Log.i(TAG_LOG,"READ_ONE request received.");
-                Cursor cursor = db.rawQuery("select * from mytable where key=?",new String[]{m.getKey()});
+                Log.i(TAG_LOG, "READ_ONE request received.");
+                Cursor cursor = db.rawQuery("select key,value from mytable where key=?",new String[]{m.getKey()});
                 if(cursor!=null && cursor.getCount()>0){
                     Message message = new Message();
                     message.setSenderPort(myPort);
                     message.setRemortPort(m.getSenderPort());
                     message.setType(Message.TYPE.REPLY_ONE);
                     message.setKey(m.getKey());
+                    message.setMessagID(m.getMessagID());
                     cursor.moveToFirst();
                     message.setValue(cursor.getString(cursor.getColumnIndex("value")));
                     new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, message);
@@ -317,19 +396,22 @@ public class SimpleDynamoProvider extends ContentProvider {
                 }
             }
             else if(type.equals(Message.TYPE.REPLY_ONE)){
-                Log.i(TAG_LOG,"Got reply for a key, releasing the lock.");
+                Log.i(TAG_LOG,"Got reply for a key, releasing the lock. ID: "+m.getMessagID());
                 result = new ConcurrentHashMap<String,String>();
                 result.put(m.getKey(),m.getValue());
-                synchronized (resultLock){
-                    resultLock.notify();
-                    Log.i(TAG_LOG,"Lock notified");
+                ackBooleanMap.put(m.getMessagID(),true);
+                Object lock = ackLockMap.get(m.getMessagID());
+                synchronized (lock){
+                    lock.notify();
+                    Log.i(TAG_LOG,"Lock notified. ID: "+m.getMessagID());
                 }
 
             }
             else if (type.equals(Message.TYPE.REPLY_ALL)){
                 result.putAll(m.getResult());
                 if(increaseCounter()){
-                    Log.i(TAG_LOG,"Got replies from five nodes.");
+                    resetCounter();
+                    Log.i(TAG_LOG,"Got replies from all nodes.");
                     synchronized (resultLock){
                         resultLock.notify();
                         Log.i(TAG_LOG,"Lock notified");
@@ -340,14 +422,59 @@ public class SimpleDynamoProvider extends ContentProvider {
             }
             else if (type.equals(Message.TYPE.DELETE_ONE)){
                 String key = m.getKey();
-                db.delete(TABLE_NAME,"key=?",new String[]{key});
+                db.delete(TABLE_NAME, "key=?", new String[]{key});
             }
             else if(type.equals(Message.TYPE.DELETE_ALL)){
                 String key = m.getKey();
                 db.delete(TABLE_NAME, null, null);
             }
             else if(type.equals(Message.TYPE.DELETE_CORD)){
+                Message message = new Message();
+                message.setMessagID(m.getMessagID());
+                message.setRemortPort(m.getSenderPort());
+                message.setType(Message.TYPE.ACK);
+                Log.i(TAG_LOG, "Sending ack for delete_chord request id:" + message.getMessagID());
+                new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, message);
+
                 delete(null, m.getKey(), null);
+            }
+            else if(type.equals(Message.TYPE.ACK)){
+
+                int id = m.getMessagID();
+                Log.i(TAG_LOG,"Ack received at server for id:"+id);
+                ackBooleanMap.put(id,true);
+                synchronized (ackLockMap.get(id)){
+                    ackLockMap.get(id).notify();
+                    Log.i(TAG_LOG,"Lock notified for id: "+id);
+                }
+                Log.i(TAG_LOG,"Lock notified");
+            }
+            else if(type.equals(Message.TYPE.GET_ME_ALL)){
+                Cursor cursor = db.rawQuery("select key,value from mytable where owner=?",new String[]{m.getCoordinator()});
+                HashMap<String,String> map = new HashMap<>();
+                if (cursor!=null && cursor.getCount()>0){
+                    for(int i=0;i<cursor.getCount();i++)
+                    {
+                        map.put(cursor.getString(cursor.getColumnIndex("key")),cursor.getString(cursor.getColumnIndex("value")));
+                        cursor.moveToNext();
+                    }
+                    Message message = new Message();
+                    message.setRemortPort(m.getSenderPort());
+                    message.setType(Message.TYPE.RECEIVE_YOU_ALL);
+                    message.setResult(map);
+                }
+
+            }
+            else if(type.equals(Message.TYPE.RECEIVE_YOU_ALL)){
+                ContentValues cv;
+                HashMap<String,String> map = m.getResult();
+                for(Map.Entry entry:map.entrySet()){
+                    cv = new ContentValues();
+                    cv.put("key",(String)entry.getKey());
+                    cv.put("value",(String)entry.getValue());
+                    cv.put("owner",m.getCoordinator());
+                    db.insertWithOnConflict(TABLE_NAME,"",cv,SQLiteDatabase.CONFLICT_REPLACE);
+                }
             }
 
 
@@ -461,13 +588,46 @@ public class SimpleDynamoProvider extends ContentProvider {
 
                 }
                 else{
+                    int id = messageID++;
                     Message message1 = new Message();
                     message1.setType(Message.TYPE.DELETE_CORD);
                     message1.setSenderPort(myPort);
                     message1.setRemortPort(myReplicaTwo);
                     message1.setKey(key);
-
+                    message1.setMessagID(id);
+                    Object lock = new Object();
+                    ackBooleanMap.put(id,false);
+                    ackLockMap.put(id,lock);
                     new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,message1);
+                    synchronized (lock){
+                        try {
+                            Log.i(TAG_LOG,"Locking for single delete");
+                            lock.wait(DELETE_ONE);
+                        } catch (InterruptedException e) {
+                            e.printStackTrace();
+                        }
+                    }
+                    Log.i(TAG_LOG,"Delete lock released");
+                    if (ackBooleanMap.get(id)){
+                        Log.i(TAG_LOG,"ack received");
+                    }
+                    else{
+                        Message message = new Message();
+                        message.setType(Message.TYPE.DELETE_ONE);
+                        message.setSenderPort(myPort);
+                        message.setRemortPort(getReplicaOne(coordinator));
+                        message.setKey(key);
+
+                        Message message2 = new Message();
+                        message2.setType(Message.TYPE.DELETE_ONE);
+                        message2.setSenderPort(myPort);
+                        message2.setRemortPort(getReplicaOne(getReplicaOne(coordinator)));
+                        message2.setKey(key);
+
+                        new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,message);
+                        new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,message2);
+                    }
+
                 }
                 break;
         }
@@ -496,10 +656,11 @@ public class SimpleDynamoProvider extends ContentProvider {
         String coordinator = getCoordinatorPort(key);
         Long rowID;
         if(coordinator.equals(myPort)){
+            values.put("owner",myPort);
             rowID = db.insertWithOnConflict(TABLE_NAME,null,values,SQLiteDatabase.CONFLICT_REPLACE);
             if(rowID==-1) Log.e(TAG_ERROR,"single key insertion error");
 
-            Log.i(TAG_LOG,"Passing info to replicas");
+            Log.i(TAG_LOG,"insert() I am cordi.. Passing info to replicas "+key+" "+value);
 
             Message message = new Message();
             message.setRemortPort(myReplicaOne);
@@ -508,6 +669,7 @@ public class SimpleDynamoProvider extends ContentProvider {
             message.setCoordinatorFailure(false);
             message.setKey(key);
             message.setValue(value);
+            message.setCoordinator(coordinator);
 
             Message message2 = new Message();
             message2.setRemortPort(myReplicaTwo);
@@ -516,12 +678,14 @@ public class SimpleDynamoProvider extends ContentProvider {
             message2.setCoordinatorFailure(false);
             message2.setKey(key);
             message2.setValue(value);
+            message2.setCoordinator(coordinator);
             new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,message);
             new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,message2);
 
         }
         else{
             Log.i(TAG_LOG,"Passing insertion to coordinator "+coordinator+" "+key+" "+value);
+            int tempMessageID = messageID++;
             Message message = new Message();
             message.setRemortPort(coordinator);
             message.setType(Message.TYPE.WRITE_OWN);
@@ -529,7 +693,40 @@ public class SimpleDynamoProvider extends ContentProvider {
             message.setCoordinatorFailure(false);
             message.setKey(key);
             message.setValue(value);
+            message.setMessagID(tempMessageID);
+            message.setCoordinator(coordinator);
+            ackLockMap.put(tempMessageID,new Object());
+            ackBooleanMap.put(tempMessageID,false);
             new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,message);
+            Log.i(TAG_LOG,"Locking for insertion ACK");
+            synchronized (ackLockMap.get(tempMessageID)){
+                try {
+                    Object o = ackLockMap.get(tempMessageID);
+                    o.wait(INSERT_LOCK_TIMEOUT);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+            }
+            Log.i(TAG_LOG,"Insertion lock released");
+            if(ackBooleanMap.get(tempMessageID)){
+                Log.i(TAG_LOG,"Reason: ack received");
+            }
+            else {
+                Log.i(TAG_LOG,"Reason: timeout.");
+                Log.e(TAG_ERROR, "Node failure @" + message.getRemortPort());
+                message.setRemortPort(getReplicaOne(coordinator));
+                message.setType(Message.TYPE.WRITE_OWN);
+                message.setCoordinatorFailure(true);
+                message.setCoordinator(coordinator);
+                new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,message);
+            }
+
+            // wait for ACK reply. If in 500ms we don't get any reply, then we assume that the coordinator has failed.
+            // One complex implementation would be :
+            //      Then we send the message to the next alive replica node, and tell her to send the message to her sister replica.
+            // Another easy one:
+            //      Send two messages, each one to one replica.
+            // Implementing the complex one.
         }
 
 		return null;
@@ -545,7 +742,7 @@ public class SimpleDynamoProvider extends ContentProvider {
             case "\"*\"":
                 Log.i(TAG_LOG,"Received * query");
                 increaseCounter();
-                Cursor cursor = db.rawQuery("select * from mytable",null);
+                Cursor cursor = db.rawQuery("select key,value from mytable",null);
                 cursor.moveToFirst();
                 if(cursor!=null && cursor.getCount()>0){
                     for(int i=0;i<cursor.getCount();i++){
@@ -585,34 +782,66 @@ public class SimpleDynamoProvider extends ContentProvider {
 
                 return matrixCursor;
             case "\"@\"":
-                return db.rawQuery("select * from mytable",null);
+                return db.rawQuery("select key,value from mytable",null);
             default:
                 String coordinator = getCoordinatorPort(key);
                 if(coordinator.equals(myPort)){
                     // Retreive from my DB
                     Log.i(TAG_LOG,"Storing in my db");
-                    return db.rawQuery("select * from mytable where key=?",new String[]{key});
+                    return db.rawQuery("select key,value from mytable where key=?",new String[]{key});
                 }
                 else{
                     // Create a message and send it to the coordinator
+                    int tempID = messageID++;
+                    Object lock = new Object();
+                    ackLockMap.put(tempID,lock);
+                    lock = ackLockMap.get(tempID);
+                    ackBooleanMap.put(tempID,false);
                     Message message = new Message();
                     message.setSenderPort(myPort);
                     message.setRemortPort(coordinator);
                     message.setKey(key);
                     message.setType(Message.TYPE.READ_ONE);
                     message.setCoordinatorFailure(false);
-
+                    message.setMessagID(tempID);
 
                         new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, message);
-                        synchronized (resultLock){
+                        synchronized (lock){
                             try {
-                                Log.i(TAG_LOG,"Locking for single query reply");
+                                Log.i(TAG_LOG,"Locking for single query reply. ID: "+tempID);
+                                lock.wait(QUERY_ONE_TIMEOUT);
+                            } catch (InterruptedException e) {
+                                e.printStackTrace();
+                            }
+                        }
+                        Log.i(TAG_LOG,"Lock released. ID: "+tempID);
+                    if(ackBooleanMap.get(tempID)){
+                        Log.i(TAG_LOG,"Reason: query result received");
+                    }
+                    else{
+                        Log.e(TAG_ERROR,"Node failure @"+coordinator);
+                        Message message1 = new Message();
+                        tempID = messageID++;
+                        message1.setSenderPort(myPort);
+                        message1.setRemortPort(getReplicaOne(coordinator));
+                        message1.setKey(key);
+                        message1.setType(Message.TYPE.READ_ONE);
+                        message1.setCoordinatorFailure(false);
+                        message1.setMessagID(tempID);
+                        ackLockMap.put(tempID,new Object());
+                        ackBooleanMap.put(tempID,false);
+                        lock = ackLockMap.get(tempID);
+                        new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, message1);
+                        synchronized (lock){
+                            try {
+                                Log.i(TAG_LOG,"Locking for single query reply from replica. ID: "+tempID);
                                 resultLock.wait();
                             } catch (InterruptedException e) {
                                 e.printStackTrace();
                             }
                         }
-                        Log.i(TAG_LOG,"Lock released");
+                        Log.i(TAG_LOG,"Lock released. ID: "+tempID);
+                    }
                     Log.i(TAG_LOG,"Creating a cursor to be returned");
                     MatrixCursor matrixCursor1 = new MatrixCursor(new String[]{"key","value"},result.size());
                     matrixCursor1.addRow(new Object[]{key,result.get(key)});
@@ -623,6 +852,51 @@ public class SimpleDynamoProvider extends ContentProvider {
 
 	}
 
+    String getReplicaOne(String coordinator){
+        switch(coordinator)
+
+        {
+            case "11108":
+                myReplicaOne="11116";
+                myReplicaTwo="11120";
+                break;
+            case "11112":
+                myReplicaOne="11108";
+                myReplicaTwo="11116";
+                break;
+            case "11116":
+                myReplicaOne="11120";
+                myReplicaTwo="11124";
+                break;
+            case "11120":
+                myReplicaOne="11124";
+                myReplicaTwo="11112";
+                break;
+            case "11124":
+                myReplicaOne="11112";
+                myReplicaTwo="11108";
+                break;
+            default:
+                Log.e(TAG_ERROR,"Some unknown port no:"+myPort);
+
+        }
+        return myReplicaOne;
+    }
+
+    String[] getNeighbours(String node){
+        //  will return three nodes
+        //  First node at index 0 will be replicaOne of the param node, so that the param node can request all keys that belongs to himself as coordinator
+        //  Second two nodes at index 1 and 2 are the coordinators for whom the requesting node is a replica.
+
+        String[] result = new String[3];
+        result[0] = getReplicaOne(node);
+        for(int i=0;i<5;i++){
+            if(getReplicaOne(getReplicaOne(idList.get(i))).equals(node))
+                result[1] = getReplicaOne(idList.get(i));
+                result[2] = (idList.get(i));
+        }
+        return result;
+    }
 	@Override
 	public int update(Uri uri, ContentValues values, String selection,
 			String[] selectionArgs) {
@@ -632,7 +906,22 @@ public class SimpleDynamoProvider extends ContentProvider {
     private synchronized boolean increaseCounter(){
         resultCount++;
         if(resultCount==5) return true;
-        else return false;
+        else if(resultCount==4){
+            try {
+                Thread.sleep(QUERY_ALL_TIMEOUT);
+
+                if(resultCount==4) {
+                    Log.e(TAG_ERROR, "Releasing query_all lock with node failure");
+                    return true;
+                }
+
+                else return false;
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        }
+        return false;
+
     }
     private synchronized void resetCounter(){
         resultCount=0;
@@ -641,10 +930,11 @@ public class SimpleDynamoProvider extends ContentProvider {
     private SQLiteDatabase db;
     static final String DB_NAME = "mydb";
     static final String TABLE_NAME = "mytable";
-    static final int DB_VERSION = 1;
+    static final int DB_VERSION = 2;
     static final String CREATE_DB_TABLE = "CREATE TABLE " + TABLE_NAME+
             " ( key STRING PRIMARY KEY,"
-            + " value STRING )";
+            + " value STRING, owner STRING)";
+
     private static class DBHelper extends SQLiteOpenHelper {
 
         DBHelper(Context context){
