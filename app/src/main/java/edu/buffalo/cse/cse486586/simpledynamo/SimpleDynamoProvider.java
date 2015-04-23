@@ -1,5 +1,13 @@
 package edu.buffalo.cse.cse486586.simpledynamo;
-
+/***************** Replicas *****************/
+// 5562-5556-5554-5558-5560
+/*
+5562:177ccecaec32c54b82d5aaafc18a2dadb753e3b1
+5556:208f7f72b198dadd244e61801abe1ec3a4857bc9
+5554:33d6357cfaaf0f72991b0ecd8c56da066613c089
+5558:abf0fd8db03e5ecb199a9b82929e9db79b909643
+5560:c25ddd596aa7c81fa12378fa725f706d54325d12
+*/
 import android.content.ContentProvider;
 import android.content.ContentValues;
 import android.content.Context;
@@ -30,6 +38,8 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
+
+
 public class SimpleDynamoProvider extends ContentProvider {
 
 /*
@@ -41,10 +51,10 @@ public class SimpleDynamoProvider extends ContentProvider {
 
     public Uri mUri;
     private static int SERVER_PORT = 10000;
-    private static int INSERT_LOCK_TIMEOUT = 1000;
+    private static int INSERT_LOCK_TIMEOUT = 2000;
     private static int QUERY_ONE_TIMEOUT = 2000;
     private static int QUERY_ALL_TIMEOUT = 2000;
-    private static int DELETE_ONE = 1000;
+    private static int DELETE_ONE = 2000;
 
 //    String predecessor=null;
 //    String successor=null;
@@ -56,8 +66,8 @@ public class SimpleDynamoProvider extends ContentProvider {
     String myPort=null;
     String myID=null;
     String myHash=null;
-    String myReplicaOne=null;
-    String myReplicaTwo=null;
+    String myReplicaOne;
+    String myReplicaTwo;
     Boolean sleep = true;
 
     HashMap<String,String> idToHash;
@@ -71,6 +81,7 @@ public class SimpleDynamoProvider extends ContentProvider {
     HashMap<Integer, Boolean> ackBooleanMap;
     int messageID = 0;
     Object resultLock;
+    String[] neighbours;
 
 
     /** Stage One:
@@ -111,7 +122,7 @@ public class SimpleDynamoProvider extends ContentProvider {
         result = new ConcurrentHashMap<String, String>();
         ackLockMap = new HashMap<Integer, Object>();
         ackBooleanMap = new HashMap<Integer, Boolean>();
-
+        neighbours = new String[3];
         /***************** Database *****************/
         db = new DBHelper(getContext()).getWritableDatabase();
         if(db!=null) {
@@ -178,31 +189,46 @@ public class SimpleDynamoProvider extends ContentProvider {
             case "11108":
                 myReplicaOne="11116";
                 myReplicaTwo="11120";
+                neighbours[0]="11116";
+                neighbours[1]="11124";
+                neighbours[2]="11112";
                 break;
             case "11112":
                 myReplicaOne="11108";
                 myReplicaTwo="11116";
+                neighbours[0]="11108";
+                neighbours[1]="11120";
+                neighbours[2]="11124";
                 break;
             case "11116":
                 myReplicaOne="11120";
                 myReplicaTwo="11124";
+                neighbours[0]="11120";
+                neighbours[1]="11108";
+                neighbours[2]="11112";
                 break;
             case "11120":
                 myReplicaOne="11124";
                 myReplicaTwo="11112";
+                neighbours[0]="11124";
+                neighbours[1]="11108";
+                neighbours[2]="11116";
                 break;
             case "11124":
                 myReplicaOne="11112";
                 myReplicaTwo="11108";
+                neighbours[0]="11112";
+                neighbours[1]="11116";
+                neighbours[2]="11120";
                 break;
             default:
                 Log.e(TAG_ERROR,"Some unknown port no:"+myPort);
 
         }
 
-        Log.i(TAG_LOG,"Replica ports are set"+myPort+" "+myReplicaOne+" "+myReplicaTwo);
-
-
+//        Log.i(TAG_LOG,"Replica ports are set. x"+myPort+" "+myReplicaOne+" "+myReplicaTwo);
+//        String[] remotePorts = getNeighbours(myPort);
+//        Log.e(TAG_LOG,remotePorts[0]+" "+remotePorts[1]+" "+remotePorts[2]);
         /***************** Server *****************/
         try
         {
@@ -213,29 +239,30 @@ public class SimpleDynamoProvider extends ContentProvider {
             e.printStackTrace();
             Log.e(TAG_ERROR,"Server IO Exception");
         }
-//        String[] remotePorts = getNeighbours(myPort);
-//        Message m = new Message();
-//        m.setCoordinator(myPort);
-//        m.setSenderPort(myPort);
-//        m.setRemortPort(remotePorts[0]);
-//        m.setType(Message.TYPE.GET_ME_ALL);
-//
-//        Message m2 = new Message();
-//        m2.setSenderPort(myPort);
-//        m2.setRemortPort(remotePorts[1]);
-//        m2.setCoordinator(remotePorts[1]);
-//        m2.setType(Message.TYPE.GET_ME_ALL);
-//
-//        Message m3 = new Message();
-//        m3.setSenderPort(myPort);
-//        m3.setRemortPort(remotePorts[2]);
-//        m3.setCoordinator(remotePorts[2]);
-//        m3.setType(Message.TYPE.GET_ME_ALL);
-//
-//        new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, m);
-//        new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, m2);
-//        new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, m3);
-        return false;
+
+        Message m = new Message();
+        m.setCoordinator(myPort);
+        m.setSenderPort(myPort);
+        m.setRemortPort(neighbours[0]);
+        m.setType(Message.TYPE.GET_ME_ALL);
+
+        Message m2 = new Message();
+        m2.setSenderPort(myPort);
+        m2.setRemortPort(neighbours[1]);
+        m2.setCoordinator(neighbours[1]);
+        m2.setType(Message.TYPE.GET_ME_ALL);
+
+        Message m3 = new Message();
+        m3.setSenderPort(myPort);
+        m3.setRemortPort(neighbours[2]);
+        m3.setCoordinator(neighbours[2]);
+        m3.setType(Message.TYPE.GET_ME_ALL);
+
+
+        new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, m);
+        new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, m2);
+        new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, m3);
+        return true;
     }
     private class ServerTask extends AsyncTask<ServerSocket, Message,  Void> {
 
@@ -284,13 +311,13 @@ public class SimpleDynamoProvider extends ContentProvider {
                 ackMessage.setMessagID(m.getMessagID());
                 ackMessage.setRemortPort(m.getSenderPort());
 
-                Log.i(TAG_LOG,"I am coordinator.. Storing in my db "+m.getKey()+" "+m.getValue());
+                Log.i(TAG_LOG, "I am coordinator.. Storing in my db " + m.getKey() + " " + m.getValue());
                 ContentValues cv = new ContentValues();
                 cv.put("key",m.getKey());
                 cv.put("value",m.getValue());
                 cv.put("owner",m.getCoordinator());
 
-                Long rowID = db.insertWithOnConflict(TABLE_NAME, null,cv,SQLiteDatabase.CONFLICT_REPLACE);
+                Long rowID = db.insertWithOnConflict(TABLE_NAME, null,cv, SQLiteDatabase.CONFLICT_REPLACE);
                 if(rowID==-1){
                     Log.e(TAG_ERROR,"Error in db inserting @onProgressUpdate @coordinator");
                 }
@@ -320,7 +347,7 @@ public class SimpleDynamoProvider extends ContentProvider {
 
             }
             else if(type.equals(Message.TYPE.WRITE_OWN) && failure.equals(true)){
-                Log.i(TAG_LOG,"Replica 1: Failure at coordinator, storing in mine"+m.getKey()+" "+m.getValue());
+                Log.e(TAG_LOG,"Replica 1: Failure at coordinator, storing in mine"+m.getKey()+" "+m.getValue());
                 ContentValues cv = new ContentValues();
                 cv.put("key",m.getKey());
                 cv.put("value",m.getValue());
@@ -337,8 +364,9 @@ public class SimpleDynamoProvider extends ContentProvider {
                 replica1.setRemortPort(myReplicaOne);
                 replica1.setKey(m.getKey());
                 replica1.setValue(m.getValue());
+                replica1.setCoordinator(m.getCoordinator());
 
-                Log.i(TAG_LOG, "Sending to replica 2"+replica1.getRemortPort()+" "+m.getKey()+" "+m.getValue());
+                Log.i(TAG_LOG, "Sending to replica2 "+replica1.getRemortPort()+" "+m.getKey()+" "+m.getValue());
                 new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, replica1);
 
             }
@@ -358,7 +386,7 @@ public class SimpleDynamoProvider extends ContentProvider {
             }
 
             else if(type.equals(Message.TYPE.READ_ALL)){
-                HashMap<String, String>  result= new HashMap<String, String>();
+                HashMap<String, String> result= new HashMap<String, String>();
                 Log.i(TAG_LOG,"Received request for * from "+m.getSenderPort());
 
                 Cursor cursor = db.rawQuery("select key,value from mytable",null);
@@ -453,21 +481,26 @@ public class SimpleDynamoProvider extends ContentProvider {
                 Cursor cursor = db.rawQuery("select key,value from mytable where owner=?",new String[]{m.getCoordinator()});
                 HashMap<String,String> map = new HashMap<>();
                 if (cursor!=null && cursor.getCount()>0){
+                    Log.e(TAG_ERROR,"GET_ALL received from "+m.getSenderPort()+" for coordinator "+m.getCoordinator());
+                    cursor.moveToFirst();
                     for(int i=0;i<cursor.getCount();i++)
                     {
-                        map.put(cursor.getString(cursor.getColumnIndex("key")),cursor.getString(cursor.getColumnIndex("value")));
+                        map.put(cursor.getString(0),cursor.getString(1));
                         cursor.moveToNext();
                     }
                     Message message = new Message();
                     message.setRemortPort(m.getSenderPort());
                     message.setType(Message.TYPE.RECEIVE_YOU_ALL);
                     message.setResult(map);
+                    message.setCoordinator(m.getCoordinator());
+                    new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, message);
                 }
 
             }
             else if(type.equals(Message.TYPE.RECEIVE_YOU_ALL)){
                 ContentValues cv;
                 HashMap<String,String> map = m.getResult();
+                Log.i(TAG_LOG,"RECEIVE_ALL message from"+m.getSenderPort()+" for coordinator "+m.getCoordinator());
                 for(Map.Entry entry:map.entrySet()){
                     cv = new ContentValues();
                     cv.put("key",(String)entry.getKey());
@@ -592,12 +625,13 @@ public class SimpleDynamoProvider extends ContentProvider {
                     Message message1 = new Message();
                     message1.setType(Message.TYPE.DELETE_CORD);
                     message1.setSenderPort(myPort);
-                    message1.setRemortPort(myReplicaTwo);
+                    message1.setRemortPort(coordinator);
                     message1.setKey(key);
                     message1.setMessagID(id);
-                    Object lock = new Object();
+
                     ackBooleanMap.put(id,false);
-                    ackLockMap.put(id,lock);
+                    ackLockMap.put(id,new Object());
+                    Object lock = ackLockMap.get(id);
                     new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,message1);
                     synchronized (lock){
                         try {
@@ -609,9 +643,10 @@ public class SimpleDynamoProvider extends ContentProvider {
                     }
                     Log.i(TAG_LOG,"Delete lock released");
                     if (ackBooleanMap.get(id)){
-                        Log.i(TAG_LOG,"ack received");
+                        Log.i(TAG_LOG,"Reason: ack received");
                     }
                     else{
+                        Log.e(TAG_ERROR,"Reason: failed coordinator: "+coordinator);
                         Message message = new Message();
                         message.setType(Message.TYPE.DELETE_ONE);
                         message.setSenderPort(myPort);
@@ -835,7 +870,7 @@ public class SimpleDynamoProvider extends ContentProvider {
                         synchronized (lock){
                             try {
                                 Log.i(TAG_LOG,"Locking for single query reply from replica. ID: "+tempID);
-                                resultLock.wait();
+                                lock.wait();
                             } catch (InterruptedException e) {
                                 e.printStackTrace();
                             }
@@ -853,6 +888,8 @@ public class SimpleDynamoProvider extends ContentProvider {
 	}
 
     String getReplicaOne(String coordinator){
+        String myReplicaOne="";
+        String myReplicaTwo="";
         switch(coordinator)
 
         {
@@ -883,6 +920,7 @@ public class SimpleDynamoProvider extends ContentProvider {
         return myReplicaOne;
     }
 
+
     String[] getNeighbours(String node){
         //  will return three nodes
         //  First node at index 0 will be replicaOne of the param node, so that the param node can request all keys that belongs to himself as coordinator
@@ -892,8 +930,12 @@ public class SimpleDynamoProvider extends ContentProvider {
         result[0] = getReplicaOne(node);
         for(int i=0;i<5;i++){
             if(getReplicaOne(getReplicaOne(idList.get(i))).equals(node))
+            {
                 result[1] = getReplicaOne(idList.get(i));
                 result[2] = (idList.get(i));
+                break;
+            }
+
         }
         return result;
     }
@@ -905,21 +947,21 @@ public class SimpleDynamoProvider extends ContentProvider {
 	}
     private synchronized boolean increaseCounter(){
         resultCount++;
-        if(resultCount==5) return true;
-        else if(resultCount==4){
-            try {
-                Thread.sleep(QUERY_ALL_TIMEOUT);
-
-                if(resultCount==4) {
-                    Log.e(TAG_ERROR, "Releasing query_all lock with node failure");
-                    return true;
-                }
-
-                else return false;
-            } catch (InterruptedException e) {
-                e.printStackTrace();
-            }
-        }
+        if(resultCount==5 || resultCount==4) return true;
+//        else if(resultCount==4){
+//            try {
+//                Thread.sleep(QUERY_ALL_TIMEOUT);
+//
+//                if(resultCount==4) {
+//                    Log.e(TAG_ERROR, "Releasing query_all lock with node failure");
+//                    return true;
+//                }
+//
+//                else return false;
+//            } catch (InterruptedException e) {
+//                e.printStackTrace();
+//            }
+//        }
         return false;
 
     }
