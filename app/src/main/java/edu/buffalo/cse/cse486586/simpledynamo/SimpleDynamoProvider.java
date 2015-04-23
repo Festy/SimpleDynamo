@@ -676,19 +676,20 @@ public class SimpleDynamoProvider extends ContentProvider {
 	}
 
 	@Override
-	public Uri insert(Uri uri, ContentValues values) {
-        if(sleep && myPort.equals("11108")){
-            try {
-                Thread.sleep(4000);
-                sleep=false;
-            } catch (InterruptedException e) {
-                e.printStackTrace();
-            }
-        }
+	public  Uri insert(Uri uri, ContentValues values) {
+//        if(sleep && myPort.equals("11108")){
+//            try {
+//                Thread.sleep(4000);
+//                sleep=false;
+//            } catch (InterruptedException e) {
+//                e.printStackTrace();
+//            }
+//        }
 
         String key = values.getAsString("key");
         String value = values.getAsString("value");
         String coordinator = getCoordinatorPort(key);
+        Log.i(TAG_LOG,"Insertion request received: "+key+" "+value);
         Long rowID;
         if(coordinator.equals(myPort)){
             values.put("owner",myPort);
@@ -770,7 +771,7 @@ public class SimpleDynamoProvider extends ContentProvider {
 
 
 	@Override
-	public Cursor query(Uri uri, String[] projection, String selection,
+	public  Cursor query(Uri uri, String[] projection, String selection,
 			String[] selectionArgs, String sortOrder) {
         String key=selection;
         switch(key){
@@ -819,14 +820,16 @@ public class SimpleDynamoProvider extends ContentProvider {
             case "\"@\"":
                 return db.rawQuery("select key,value from mytable",null);
             default:
+                Log.i(TAG_LOG,"Got a query for: "+key);
                 String coordinator = getCoordinatorPort(key);
                 if(coordinator.equals(myPort)){
                     // Retreive from my DB
-                    Log.i(TAG_LOG,"Storing in my db");
+                    Log.i(TAG_LOG,"retrieving from my db");
                     return db.rawQuery("select key,value from mytable where key=?",new String[]{key});
                 }
                 else{
                     // Create a message and send it to the coordinator
+                    Log.i(TAG_LOG,"Forwarding to coordinator: "+coordinator);
                     int tempID = messageID++;
                     Object lock = new Object();
                     ackLockMap.put(tempID,lock);
@@ -869,7 +872,7 @@ public class SimpleDynamoProvider extends ContentProvider {
                         new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, message1);
                         synchronized (lock){
                             try {
-                                Log.i(TAG_LOG,"Locking for single query reply from replica. ID: "+tempID);
+                                Log.i(TAG_LOG,"Locking for single query reply from replica. ID: "+tempID+" "+getReplicaOne(coordinator));
                                 lock.wait();
                             } catch (InterruptedException e) {
                                 e.printStackTrace();
