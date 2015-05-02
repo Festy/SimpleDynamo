@@ -2,12 +2,12 @@ package edu.buffalo.cse.cse486586.simpledynamo;
 /***************** Replicas *****************/
 // 5562-5556-5554-5558-5560
 /*
-5562:177ccecaec32c54b82d5aaafc18a2dadb753e3b1
-5556:208f7f72b198dadd244e61801abe1ec3a4857bc9
-5554:33d6357cfaaf0f72991b0ecd8c56da066613c089
-5558:abf0fd8db03e5ecb199a9b82929e9db79b909643
-5560:c25ddd596aa7c81fa12378fa725f706d54325d12
-*/
+ 5562:177ccecaec32c54b82d5aaafc18a2dadb753e3b1
+ 5556:208f7f72b198dadd244e61801abe1ec3a4857bc9
+ 5554:33d6357cfaaf0f72991b0ecd8c56da066613c089
+ 5558:abf0fd8db03e5ecb199a9b82929e9db79b909643
+ 5560:c25ddd596aa7c81fa12378fa725f706d54325d12
+ */
 import android.content.ContentProvider;
 import android.content.ContentValues;
 import android.content.Context;
@@ -32,32 +32,30 @@ import java.net.UnknownHostException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.Formatter;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-
+import java.util.concurrent.Semaphore;
 
 
 public class SimpleDynamoProvider extends ContentProvider {
-
-/*
-5562:177ccecaec32c54b82d5aaafc18a2dadb753e3b1
-5556:208f7f72b198dadd244e61801abe1ec3a4857bc9
-5554:33d6357cfaaf0f72991b0ecd8c56da066613c089
-5558:abf0fd8db03e5ecb199a9b82929e9db79b909643
-5560:c25ddd596aa7c81fa12378fa725f706d54325d12 */
+    
+    /*
+     5562:177ccecaec32c54b82d5aaafc18a2dadb753e3b1
+     5556:208f7f72b198dadd244e61801abe1ec3a4857bc9
+     5554:33d6357cfaaf0f72991b0ecd8c56da066613c089
+     5558:abf0fd8db03e5ecb199a9b82929e9db79b909643
+     5560:c25ddd596aa7c81fa12378fa725f706d54325d12 */
 
     public Uri mUri;
     private static int SERVER_PORT = 10000;
     private static int INSERT_LOCK_TIMEOUT = 2000;
     private static int QUERY_ONE_TIMEOUT = 2000;
-    private static int QUERY_ALL_TIMEOUT = 2000;
-    private static int DELETE_ONE = 2000;
+    private static int DELETE_ONE = 1200;
 
-//    String predecessor=null;
-//    String successor=null;
+    //    String predecessor=null;
+    //    String successor=null;
 
     final static String TAG_CONNECTION = SimpleDynamoActivity.class.getSimpleName()+" connection";
     final static String TAG_LOG = SimpleDynamoActivity.class.getSimpleName()+" log";
@@ -69,9 +67,11 @@ public class SimpleDynamoProvider extends ContentProvider {
     String myReplicaOne;
     String myReplicaTwo;
     Boolean sleep = true;
+    HashMap<String, Message> lockedMessageMap;
+    Semaphore semaphore = new Semaphore(1,true);
 
-    HashMap<String,String> idToHash;
-    HashMap<String, String> hashToID; // We may not need this ever..
+    //    HashMap<String,String> idToHash;
+    //    HashMap<String, String> hashToID; // We may not need this ever..
     ArrayList<String> sortedHashList;
     ArrayList<String> idList;
     ConcurrentHashMap<String, String> result;
@@ -82,6 +82,7 @@ public class SimpleDynamoProvider extends ContentProvider {
     int messageID = 0;
     Object resultLock;
     String[] neighbours;
+    
 
 
     /** Stage One:
@@ -123,6 +124,7 @@ public class SimpleDynamoProvider extends ContentProvider {
         ackLockMap = new HashMap<Integer, Object>();
         ackBooleanMap = new HashMap<Integer, Boolean>();
         neighbours = new String[3];
+        lockedMessageMap = new HashMap<>();
         /***************** Database *****************/
         db = new DBHelper(getContext()).getWritableDatabase();
         if(db!=null) {
@@ -134,39 +136,45 @@ public class SimpleDynamoProvider extends ContentProvider {
 
 
         /******** Creating ID -> Hash table **********/
-        try {
-            idToHash = new HashMap<String,String>();
+//        try
+        {
+            //            idToHash = new HashMap<String,String>();
+            //
+            //            idToHash.put("11108",genHash("5554"));
+            //            idToHash.put("11112",genHash("5556"));
+            //            idToHash.put("11116",genHash("5558"));
+            //            idToHash.put("11120",genHash("5560"));
+            //            idToHash.put("11124",genHash("5562"));
 
-            idToHash.put("11108",genHash("5554"));
-            idToHash.put("11112",genHash("5556"));
-            idToHash.put("11116",genHash("5558"));
-            idToHash.put("11120",genHash("5560"));
-            idToHash.put("11124",genHash("5562"));
-
-            hashToID = new HashMap<String, String>();
-            hashToID.put(genHash("5554"),"11108");
-            hashToID.put(genHash("5556"),"11112");
-            hashToID.put(genHash("5558"),"11116");
-            hashToID.put(genHash("5560"),"11120");
-            hashToID.put(genHash("5562"),"11124");
+            //            hashToID = new HashMap<String, String>();
+            //            hashToID.put(genHash("5554"),"11108");
+            //            hashToID.put(genHash("5556"),"11112");
+            //            hashToID.put(genHash("5558"),"11116");
+            //            hashToID.put(genHash("5560"),"11120");
+            //            hashToID.put(genHash("5562"),"11124");
 
             sortedHashList = new ArrayList<String>();
-            sortedHashList.add(genHash("5562"));
-            sortedHashList.add(genHash("5556"));
-            sortedHashList.add(genHash("5554"));
-            sortedHashList.add(genHash("5558"));
-            sortedHashList.add(genHash("5560"));
-//
-//            Log.i(TAG_LOG,genHash("5554"));
-//            Log.i(TAG_LOG,genHash("5556"));
-//            Log.i(TAG_LOG,genHash("5558"));
-//            Log.i(TAG_LOG,genHash("5560"));
-//            Log.i(TAG_LOG,genHash("5562"));
+//            sortedHashList.add(genHash("5562"));
+//            sortedHashList.add(genHash("5556"));
+//            sortedHashList.add(genHash("5554"));
+//            sortedHashList.add(genHash("5558"));
+//            sortedHashList.add(genHash("5560"));
+            sortedHashList.add("177ccecaec32c54b82d5aaafc18a2dadb753e3b1");
+            sortedHashList.add("208f7f72b198dadd244e61801abe1ec3a4857bc9");
+            sortedHashList.add("33d6357cfaaf0f72991b0ecd8c56da066613c089");
+            sortedHashList.add("abf0fd8db03e5ecb199a9b82929e9db79b909643");
+            sortedHashList.add("c25ddd596aa7c81fa12378fa725f706d54325d12");
+            //
+            //            Log.i(TAG_LOG,genHash("5554"));
+            //            Log.i(TAG_LOG,genHash("5556"));
+            //            Log.i(TAG_LOG,genHash("5558"));
+            //            Log.i(TAG_LOG,genHash("5560"));
+            //            Log.i(TAG_LOG,genHash("5562"));
 
 
 
 
-            Collections.sort(sortedHashList);
+//            Collections.sort(sortedHashList);
 
             idList = new ArrayList<String>();
             idList.add("11124");
@@ -175,9 +183,10 @@ public class SimpleDynamoProvider extends ContentProvider {
             idList.add("11116");
             idList.add("11120");
             Log.i(TAG_LOG,"Hash tables created.");
-        } catch (NoSuchAlgorithmException e) {
-            Log.e(TAG_ERROR,"NoSuchAlgorithmException @Hashtables");
         }
+//        catch (NoSuchAlgorithmException e) {
+//            Log.e(TAG_ERROR,"NoSuchAlgorithmException @Hashtables");
+//        }
 
 
         /***************** Replicas *****************/
@@ -226,9 +235,9 @@ public class SimpleDynamoProvider extends ContentProvider {
 
         }
 
-//        Log.i(TAG_LOG,"Replica ports are set. x"+myPort+" "+myReplicaOne+" "+myReplicaTwo);
-//        String[] remotePorts = getNeighbours(myPort);
-//        Log.e(TAG_LOG,remotePorts[0]+" "+remotePorts[1]+" "+remotePorts[2]);
+        //        Log.i(TAG_LOG,"Replica ports are set. x"+myPort+" "+myReplicaOne+" "+myReplicaTwo);
+        //        String[] remotePorts = getNeighbours(myPort);
+        //        Log.e(TAG_LOG,remotePorts[0]+" "+remotePorts[1]+" "+remotePorts[2]);
         /***************** Server *****************/
         try
         {
@@ -240,29 +249,61 @@ public class SimpleDynamoProvider extends ContentProvider {
             Log.e(TAG_ERROR,"Server IO Exception");
         }
 
-        Message m = new Message();
-        m.setCoordinator(myPort);
-        m.setSenderPort(myPort);
-        m.setRemortPort(neighbours[0]);
-        m.setType(Message.TYPE.GET_ME_ALL);
-
-        Message m2 = new Message();
-        m2.setSenderPort(myPort);
-        m2.setRemortPort(neighbours[1]);
-        m2.setCoordinator(neighbours[1]);
-        m2.setType(Message.TYPE.GET_ME_ALL);
-
-        Message m3 = new Message();
-        m3.setSenderPort(myPort);
-        m3.setRemortPort(neighbours[2]);
-        m3.setCoordinator(neighbours[2]);
-        m3.setType(Message.TYPE.GET_ME_ALL);
-
-
-        new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, m);
-        new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, m2);
-        new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, m3);
+        Log.i(TAG_LOG, "Sending recovery Messages");
+            new RecoverTask().executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
+        Log.i(TAG_LOG,"Sent!");
+//        Message m = new Message();
+//        m.setCoordinator(myPort);
+//        m.setSenderPort(myPort);
+//        m.setRemortPort(neighbours[0]);
+//        m.setType(Message.TYPE.GET_ME_ALL);
+//
+//        Message m2 = new Message();
+//        m2.setSenderPort(myPort);
+//        m2.setRemortPort(neighbours[1]);
+//        m2.setCoordinator(neighbours[1]);
+//        m2.setType(Message.TYPE.GET_ME_ALL);
+//
+//        Message m3 = new Message();
+//        m3.setSenderPort(myPort);
+//        m3.setRemortPort(neighbours[2]);
+//        m3.setCoordinator(neighbours[2]);
+//        m3.setType(Message.TYPE.GET_ME_ALL);
+//
+//
+//        new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, m);
+//        new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, m2);
+//        new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, m3);
         return true;
+    }
+    private class RecoverTask extends AsyncTask<Void, Void, Void>{
+
+        @Override
+        protected Void doInBackground(Void... voids) {
+            Message m = new Message();
+            m.setCoordinator(myPort);
+            m.setSenderPort(myPort);
+            m.setRemortPort(neighbours[0]);
+            m.setType(Message.TYPE.GET_ME_ALL);
+
+            Message m2 = new Message();
+            m2.setSenderPort(myPort);
+            m2.setRemortPort(neighbours[1]);
+            m2.setCoordinator(neighbours[1]);
+            m2.setType(Message.TYPE.GET_ME_ALL);
+
+            Message m3 = new Message();
+            m3.setSenderPort(myPort);
+            m3.setRemortPort(neighbours[2]);
+            m3.setCoordinator(neighbours[2]);
+            m3.setType(Message.TYPE.GET_ME_ALL);
+
+
+            new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, m);
+            new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, m2);
+            new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, m3);
+            return null;
+        }
     }
     private class ServerTask extends AsyncTask<ServerSocket, Message,  Void> {
 
@@ -578,8 +619,8 @@ public class SimpleDynamoProvider extends ContentProvider {
 
     }
     @Override
-	public int delete(Uri uri, String selection, String[] selectionArgs) {
-		String key = selection;
+    public int delete(Uri uri, String selection, String[] selectionArgs) {
+        String key = selection;
 
         switch (key){
             case "\"@\"":
@@ -666,17 +707,17 @@ public class SimpleDynamoProvider extends ContentProvider {
                 }
                 break;
         }
-		return 0;
-	}
+        return 0;
+    }
 
-	@Override
-	public String getType(Uri uri) {
-		// TODO Auto-generated method stub
-		return null;
-	}
+    @Override
+    public String getType(Uri uri) {
+        // TODO Auto-generated method stub
+        return null;
+    }
 
-	@Override
-	public  Uri insert(Uri uri, ContentValues values) {
+    @Override
+    public  Uri insert(Uri uri, ContentValues values) {
 //        if(sleep && myPort.equals("11108")){
 //            try {
 //                Thread.sleep(4000);
@@ -765,14 +806,14 @@ public class SimpleDynamoProvider extends ContentProvider {
             // Implementing the complex one.
         }
 
-		return null;
-	}
+        return null;
+    }
 
 
 
-	@Override
-	public  Cursor query(Uri uri, String[] projection, String selection,
-			String[] selectionArgs, String sortOrder) {
+    @Override
+    public  Cursor query(Uri uri, String[] projection, String selection,
+                         String[] selectionArgs, String sortOrder) {
         String key=selection;
         switch(key){
             case "\"*\"":
@@ -797,7 +838,7 @@ public class SimpleDynamoProvider extends ContentProvider {
                         m.setRemortPort(remotePort);
                         m.setSenderPort(myPort);
 
-                            new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, m);
+                        new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, m);
 
                     }
                 }
@@ -843,16 +884,16 @@ public class SimpleDynamoProvider extends ContentProvider {
                     message.setCoordinatorFailure(false);
                     message.setMessagID(tempID);
 
-                        new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, message);
-                        synchronized (lock){
-                            try {
-                                Log.i(TAG_LOG,"Locking for single query reply. ID: "+tempID);
-                                lock.wait(QUERY_ONE_TIMEOUT);
-                            } catch (InterruptedException e) {
-                                e.printStackTrace();
-                            }
+                    new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, message);
+                    synchronized (lock){
+                        try {
+                            Log.i(TAG_LOG,"Locking for single query reply. ID: "+tempID);
+                            lock.wait(QUERY_ONE_TIMEOUT);
+                        } catch (InterruptedException e) {
+                            e.printStackTrace();
                         }
-                        Log.i(TAG_LOG,"Lock released. ID: "+tempID);
+                    }
+                    Log.i(TAG_LOG,"Lock released. ID: "+tempID);
                     if(ackBooleanMap.get(tempID)){
                         Log.i(TAG_LOG,"Reason: query result received");
                     }
@@ -888,7 +929,7 @@ public class SimpleDynamoProvider extends ContentProvider {
 
         }
 
-	}
+    }
 
     String getReplicaOne(String coordinator){
         String myReplicaOne="";
@@ -942,12 +983,12 @@ public class SimpleDynamoProvider extends ContentProvider {
         }
         return result;
     }
-	@Override
-	public int update(Uri uri, ContentValues values, String selection,
-			String[] selectionArgs) {
-		// TODO Auto-generated method stub
-		return 0;
-	}
+    @Override
+    public int update(Uri uri, ContentValues values, String selection,
+                      String[] selectionArgs) {
+        // TODO Auto-generated method stub
+        return 0;
+    }
     private synchronized boolean increaseCounter(){
         resultCount++;
         if(resultCount==5 || resultCount==4) return true;
